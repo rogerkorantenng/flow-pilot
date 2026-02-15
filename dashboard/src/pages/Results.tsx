@@ -18,11 +18,19 @@ import {
   ArrowUpDown,
   Code,
   Eye,
+  Sparkles,
+  Loader2,
+  BarChart3,
+  Activity,
+  TrendingUp,
+  AlertTriangle,
+  Info,
 } from 'lucide-react';
+import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, BarChart, Bar, XAxis, YAxis, CartesianGrid } from 'recharts';
 import StatusBadge from '../components/StatusBadge';
 import { SkeletonCard } from '../components/Skeleton';
 import ResultRenderer from '../components/ResultRenderer';
-import { listResults, listWorkflows } from '../services/api';
+import { listResults, listWorkflows, generateInsights, type Insight } from '../services/api';
 
 const actionIcons: Record<string, React.ReactNode> = {
   navigate: <Globe className="w-3.5 h-3.5 text-blue-500" />,
@@ -194,10 +202,15 @@ function ResultCard({
   );
 }
 
+const PIE_COLORS = ['#3b82f6', '#f59e0b', '#22c55e', '#a855f7', '#6b7280', '#f43f5e'];
+
 export default function Results() {
   const [actionFilter, setActionFilter] = useState('all');
   const [workflowFilter, setWorkflowFilter] = useState('all');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [insights, setInsights] = useState<Insight[]>([]);
+  const [insightsSummary, setInsightsSummary] = useState('');
+  const [insightsLoading, setInsightsLoading] = useState(false);
 
   const { data: results = [], isLoading } = useQuery({
     queryKey: ['results', actionFilter],
@@ -296,6 +309,151 @@ export default function Results() {
           </div>
         )}
       </div>
+
+      {/* Data Dashboard */}
+      {filtered.length > 0 && (
+        <div className="mb-6 space-y-4">
+          {/* Stat Cards */}
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Database className="w-4 h-4 text-purple-500" />
+                <span className="text-xs text-gray-500">Total Results</span>
+              </div>
+              <span className="text-2xl font-bold">{filtered.length}</span>
+            </div>
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <Activity className="w-4 h-4 text-blue-500" />
+                <span className="text-xs text-gray-500">Workflows</span>
+              </div>
+              <span className="text-2xl font-bold">
+                {new Set(filtered.map((r) => r.workflow_id)).size}
+              </span>
+            </div>
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <BarChart3 className="w-4 h-4 text-green-500" />
+                <span className="text-xs text-gray-500">Extract Steps</span>
+              </div>
+              <span className="text-2xl font-bold">
+                {filtered.filter((r) => r.action === 'extract').length}
+              </span>
+            </div>
+            <div className="card p-4">
+              <div className="flex items-center gap-2 mb-1">
+                <TrendingUp className="w-4 h-4 text-amber-500" />
+                <span className="text-xs text-gray-500">Success Rate</span>
+              </div>
+              <span className="text-2xl font-bold text-green-600">
+                {Math.round((filtered.filter((r) => r.run_status === 'completed').length / filtered.length) * 100)}%
+              </span>
+            </div>
+          </div>
+
+          {/* Charts Row */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Action breakdown pie */}
+            <div className="card p-4">
+              <h3 className="text-sm font-semibold text-gray-600 mb-3">Results by Action Type</h3>
+              <ResponsiveContainer width="100%" height={180}>
+                <PieChart>
+                  <Pie
+                    data={(() => {
+                      const counts: Record<string, number> = {};
+                      filtered.forEach((r) => { counts[r.action] = (counts[r.action] || 0) + 1; });
+                      return Object.entries(counts).map(([name, value]) => ({ name, value }));
+                    })()}
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={45}
+                    outerRadius={75}
+                    paddingAngle={3}
+                    dataKey="value"
+                  >
+                    {ACTION_FILTERS.filter((f) => f !== 'all').map((_, i) => (
+                      <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                </PieChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Results by workflow bar */}
+            <div className="card p-4">
+              <h3 className="text-sm font-semibold text-gray-600 mb-3">Results by Workflow</h3>
+              <ResponsiveContainer width="100%" height={180}>
+                <BarChart
+                  data={(() => {
+                    const counts: Record<string, { name: string; count: number }> = {};
+                    filtered.forEach((r) => {
+                      if (!counts[r.workflow_id]) counts[r.workflow_id] = { name: r.workflow_name.slice(0, 20), count: 0 };
+                      counts[r.workflow_id].count++;
+                    });
+                    return Object.values(counts).sort((a, b) => b.count - a.count).slice(0, 6);
+                  })()}
+                  layout="vertical"
+                >
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis type="number" tick={{ fontSize: 10 }} />
+                  <YAxis type="category" dataKey="name" tick={{ fontSize: 10 }} width={100} />
+                  <Tooltip />
+                  <Bar dataKey="count" fill="#6366f1" radius={[0, 4, 4, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* AI Insights */}
+          {insights.length > 0 ? (
+            <div className="card p-5 bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles className="w-5 h-5 text-purple-600" />
+                <h3 className="font-semibold text-purple-900">AI Insights</h3>
+              </div>
+              {insightsSummary && <p className="text-sm text-purple-800 mb-3">{insightsSummary}</p>}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {insights.map((insight, i) => (
+                  <div key={i} className={`bg-white rounded-lg p-3 border ${
+                    insight.severity === 'warning' ? 'border-amber-200' :
+                    insight.severity === 'success' ? 'border-green-200' : 'border-gray-200'
+                  }`}>
+                    <div className="flex items-center gap-2 mb-1">
+                      {insight.severity === 'warning' ? <AlertTriangle className="w-3.5 h-3.5 text-amber-500" /> :
+                       insight.severity === 'success' ? <TrendingUp className="w-3.5 h-3.5 text-green-500" /> :
+                       <Info className="w-3.5 h-3.5 text-blue-500" />}
+                      <h4 className="text-xs font-semibold">{insight.title}</h4>
+                    </div>
+                    <p className="text-[11px] text-gray-600">{insight.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <button
+              className="card p-4 w-full text-left flex items-center gap-3 hover:shadow-md transition-all bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200"
+              onClick={async () => {
+                setInsightsLoading(true);
+                try {
+                  const res = await generateInsights();
+                  setInsights(res.insights);
+                  setInsightsSummary(res.summary);
+                } catch { /* ignore */ } finally {
+                  setInsightsLoading(false);
+                }
+              }}
+              disabled={insightsLoading}
+            >
+              {insightsLoading ? <Loader2 className="w-5 h-5 text-purple-500 animate-spin" /> : <Sparkles className="w-5 h-5 text-purple-500" />}
+              <div>
+                <span className="font-semibold text-purple-900 block">Generate AI Insights</span>
+                <span className="text-xs text-purple-600">Analyze all extracted data for trends and patterns</span>
+              </div>
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Filters Row */}
       <div className="flex flex-col sm:flex-row gap-3 mb-6">

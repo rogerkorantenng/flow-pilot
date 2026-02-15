@@ -22,7 +22,7 @@ import {
 import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
 import { SkeletonCard } from '../components/Skeleton';
-import { listWorkflows, deleteWorkflow, triggerRun, planWorkflow, createWorkflow } from '../services/api';
+import { listWorkflows, deleteWorkflow, triggerRun, generateWorkflow } from '../services/api';
 import type { WorkflowStep } from '../types/workflow';
 
 const actionIcons: Record<string, React.ReactNode> = {
@@ -70,17 +70,12 @@ export default function Workflows() {
     if (!nlInput.trim()) return;
     setPlanning(true);
     try {
-      const { steps } = await planWorkflow(nlInput);
-      const workflow = await createWorkflow({
-        name: nlInput.slice(0, 60),
-        description: nlInput,
-        steps_json: JSON.stringify(steps),
-      });
+      const result = await generateWorkflow(nlInput);
       queryClient.invalidateQueries({ queryKey: ['workflows'] });
-      toast.success(`Workflow created with ${steps.length} steps`);
-      navigate(`/workflows/${workflow.id}`);
+      toast.success(`Workflow created with ${result.steps_count} steps${result.trigger_type === 'scheduled' ? ' (scheduled)' : ''}`);
+      navigate(`/workflows/${result.id}`);
     } catch {
-      toast.error('Failed to plan workflow');
+      toast.error('Failed to generate workflow');
     } finally {
       setPlanning(false);
     }

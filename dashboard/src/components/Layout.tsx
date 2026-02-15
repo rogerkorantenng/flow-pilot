@@ -12,6 +12,7 @@ import {
   Sun,
   MessageCircle,
   LogOut,
+  BookOpen,
 } from 'lucide-react';
 import ChatSidebar from './ChatSidebar';
 
@@ -20,6 +21,7 @@ const navItems = [
   { path: '/workflows', label: 'Workflows', icon: Workflow },
   { path: '/results', label: 'Results', icon: Database },
   { path: '/templates', label: 'Templates', icon: BookTemplate },
+  { path: '/guide', label: 'Guide', icon: BookOpen },
   { path: '/settings', label: 'Settings', icon: Settings },
 ];
 

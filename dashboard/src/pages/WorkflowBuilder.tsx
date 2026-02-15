@@ -44,6 +44,7 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import { getWorkflow, createWorkflow, updateWorkflow, planWorkflow } from '../services/api';
+import WorkflowCanvas from '../components/workflow/WorkflowCanvas';
 import type { WorkflowStep, WorkflowVariable } from '../types/workflow';
 
 const ACTIONS = ['navigate', 'click', 'type', 'extract', 'wait', 'conditional'];
@@ -304,6 +305,7 @@ export default function WorkflowBuilder() {
   const [nlInput, setNlInput] = useState('');
   const [planning, setPlanning] = useState(false);
   const [expandedStep, setExpandedStep] = useState<number | null>(null);
+  const [viewMode, setViewMode] = useState<'list' | 'visual'>('list');
 
   const sensors = useSensors(
     useSensor(PointerSensor),
@@ -649,14 +651,44 @@ export default function WorkflowBuilder() {
         <div className="flex items-center justify-between mb-4">
           <div>
             <h2 className="text-lg font-semibold">Steps ({steps.length})</h2>
-            <p className="text-xs text-gray-400 mt-0.5">Drag to reorder. Click to expand and edit.</p>
+            <p className="text-xs text-gray-400 mt-0.5">
+              {viewMode === 'list' ? 'Drag to reorder. Click to expand and edit.' : 'Visual flow editor. Add nodes from the right panel.'}
+            </p>
           </div>
-          <button className="btn-secondary text-sm flex items-center gap-1.5" onClick={addStep}>
-            <Plus className="w-4 h-4" /> Add Step
-          </button>
+          <div className="flex items-center gap-2">
+            <div className="flex bg-gray-100 rounded-lg p-0.5">
+              <button
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  viewMode === 'list' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'
+                }`}
+                onClick={() => setViewMode('list')}
+              >
+                List
+              </button>
+              <button
+                className={`px-3 py-1.5 rounded-md text-xs font-medium transition-all ${
+                  viewMode === 'visual' ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'
+                }`}
+                onClick={() => setViewMode('visual')}
+              >
+                Visual
+              </button>
+            </div>
+            {viewMode === 'list' && (
+              <button className="btn-secondary text-sm flex items-center gap-1.5" onClick={addStep}>
+                <Plus className="w-4 h-4" /> Add Step
+              </button>
+            )}
+          </div>
         </div>
 
-        {steps.length > 0 ? (
+        {viewMode === 'visual' ? (
+          <WorkflowCanvas
+            steps={steps}
+            onChange={setSteps}
+            height="500px"
+          />
+        ) : steps.length > 0 ? (
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <SortableContext
               items={steps.map((s) => s.step_number.toString())}

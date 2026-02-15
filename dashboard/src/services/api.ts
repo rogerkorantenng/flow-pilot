@@ -14,19 +14,6 @@ api.interceptors.request.use((config) => {
   return config;
 });
 
-// Auto-logout on 401 (stale/missing user)
-api.interceptors.response.use(
-  (res) => res,
-  (error) => {
-    if (error.response?.status === 401 && localStorage.getItem('userId')) {
-      localStorage.removeItem('userName');
-      localStorage.removeItem('userId');
-      window.location.reload();
-    }
-    return Promise.reject(error);
-  },
-);
-
 // Users
 export const enterUser = (name: string) =>
   api.post<{ id: string; name: string; is_new: boolean }>('/users/enter', { name }).then((r) => r.data);
@@ -123,6 +110,44 @@ export interface AIStatus {
 
 export const getAIStatus = () =>
   api.get<AIStatus>('/workflows/ai/status').then((r) => r.data);
+
+// Generate Workflow (one-shot: describe → create)
+export const generateWorkflow = (description: string) =>
+  api.post<{
+    id: string;
+    name: string;
+    description: string;
+    steps_json: string;
+    trigger_type: string;
+    schedule_cron: string | null;
+    status: string;
+    steps_count: number;
+  }>('/workflows/generate', { description }).then((r) => r.data);
+
+// Smart Insights
+export interface Insight {
+  type: string;
+  title: string;
+  description: string;
+  severity: string;
+  data: Record<string, unknown> | null;
+}
+
+export interface InsightsResponse {
+  insights: Insight[];
+  summary: string;
+  ai_generated: boolean;
+}
+
+export const generateInsights = (params?: { workflow_id?: string; run_id?: string }) =>
+  api.post<InsightsResponse>('/insights/generate', params || {}).then((r) => r.data);
+
+// Publish to Marketplace
+export const publishTemplate = (workflowId: string, category: string) =>
+  api.post<{ id: string; name: string; category: string; message: string }>(
+    '/templates/publish',
+    { workflow_id: workflowId, category },
+  ).then((r) => r.data);
 
 // Chat Copilot
 export const sendChat = (message: string, context?: string) =>

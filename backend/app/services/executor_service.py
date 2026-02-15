@@ -380,9 +380,36 @@ class ExecutorService:
             )
             steps = result.scalars().all()
 
+            skip_next = False
             for step in steps:
+                # ── Conditional branching: skip step if previous condition was False ──
+                if skip_next:
+                    skip_next = False
+                    step.status = "skipped"
+                    step.completed_at = datetime.now(timezone.utc)
+                    run.completed_steps += 1
+                    await db.commit()
+                    await self._emit(run_id, {
+                        "type": "step_skipped",
+                        "run_id": run_id,
+                        "step_id": step.id,
+                        "step_number": step.step_number,
+                        "reason": "conditional_branch_false",
+                    })
+                    continue
+
                 try:
                     await self._execute_step(step, db, run_id)
+
+                    # Check if this step was a conditional that evaluated to false
+                    if step.action == "conditional" and step.result_data:
+                        try:
+                            cond_result = json.loads(step.result_data)
+                            if cond_result.get("branch_taken") == "skip_next" or not cond_result.get("evaluated_to", True):
+                                skip_next = True
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+
                     run.completed_steps += 1
                     await db.commit()
                 except StepFailedError as e:
@@ -398,6 +425,13 @@ class ExecutorService:
                         "step_number": step.step_number,
                         "error": str(e),
                     })
+
+                    # ── AI Self-Healing: try auto-fix before asking user ──
+                    healed = await self._try_self_heal(step, str(e), run_id, db)
+                    if healed:
+                        run.completed_steps += 1
+                        await db.commit()
+                        continue
 
                     resolution = await self._wait_for_resolution(run_id, step.id)
                     if resolution == "abort":
@@ -679,6 +713,59 @@ Evaluate this condition based on the data. Return JSON with "evaluated_to" (bool
             }
 
         return {"status": "completed", "action": step.action}
+
+    async def _try_self_heal(self, step: WorkflowStep, error_msg: str, run_id: str, db: AsyncSession) -> bool:
+        """Try to auto-fix a failed step using AI. Returns True if healed."""
+        nova = _get_nova()
+        if not nova:
+            return False
+        try:
+            from app.services.nova_service import ThrottledError
+
+            prompt = f"""A browser automation step failed. Suggest a fix.
+
+Step: {step.action} on target "{step.target}"
+Description: {step.description}
+Error: {error_msg}
+
+Return JSON: {{"fixed_target": "...", "fixed_value": "...", "explanation": "..."}}"""
+
+            raw = await asyncio.to_thread(
+                nova._invoke_text, prompt,
+                "You are a browser automation debugging expert. Return ONLY valid JSON.", 512,
+            )
+            text = raw.strip()
+            if text.startswith("```"):
+                text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+                if text.endswith("```"):
+                    text = text[:-3]
+                text = text.strip()
+            fix = json.loads(text)
+
+            if fix.get("fixed_target"):
+                step.target = fix["fixed_target"]
+            if fix.get("fixed_value"):
+                step.value = fix["fixed_value"]
+
+            step.status = "pending"
+            step.error_message = None
+            await db.commit()
+
+            await self._execute_step(step, db, run_id)
+
+            # Emit healed event
+            await self._emit(run_id, {
+                "type": "step_healed",
+                "run_id": run_id,
+                "step_id": step.id,
+                "step_number": step.step_number,
+                "fix": fix.get("explanation", "Auto-fixed by AI"),
+            })
+            logger.info(f"Step {step.step_number} self-healed: {fix.get('explanation', 'N/A')}")
+            return True
+        except Exception as e:
+            logger.warning(f"Self-healing failed for step {step.step_number}: {e}")
+            return False
 
     _resolution_events: dict[str, asyncio.Event] = {}
     _resolutions: dict[str, str] = {}

@@ -204,6 +204,68 @@ async def plan_workflow(req: PlanRequest):
     return {"steps": steps}
 
 
+class GenerateRequest(BaseModel):
+    description: str
+
+
+@router.post("/generate")
+async def generate_workflow(req: GenerateRequest, user_id: str = Depends(get_user_id), db: AsyncSession = Depends(get_db)):
+    """One-shot: describe what you want → AI plans steps + creates the workflow."""
+    from app.services.planner_service import PlannerService
+
+    planner = PlannerService()
+    steps = await planner.plan(req.description)
+
+    # Generate a smart name from the description
+    desc = req.description.strip()
+    name = desc[:60] if len(desc) <= 60 else desc[:57] + "..."
+
+    # Detect if it should be scheduled
+    desc_lower = desc.lower()
+    trigger_type = "manual"
+    schedule_cron = None
+    schedule_keywords = {
+        "every morning": "0 9 * * *",
+        "every day": "0 9 * * *",
+        "daily": "0 9 * * *",
+        "every hour": "0 * * * *",
+        "hourly": "0 * * * *",
+        "every week": "0 9 * * 1",
+        "weekly": "0 9 * * 1",
+        "every 6 hours": "0 */6 * * *",
+        "every night": "0 21 * * *",
+        "nightly": "0 21 * * *",
+    }
+    for phrase, cron in schedule_keywords.items():
+        if phrase in desc_lower:
+            trigger_type = "scheduled"
+            schedule_cron = cron
+            break
+
+    workflow = Workflow(
+        user_id=user_id,
+        name=name,
+        description=desc,
+        steps_json=json.dumps(steps),
+        trigger_type=trigger_type,
+        schedule_cron=schedule_cron,
+    )
+    db.add(workflow)
+    await db.commit()
+    await db.refresh(workflow)
+
+    return {
+        "id": workflow.id,
+        "name": workflow.name,
+        "description": workflow.description,
+        "steps_json": workflow.steps_json,
+        "trigger_type": workflow.trigger_type,
+        "schedule_cron": workflow.schedule_cron,
+        "status": workflow.status,
+        "steps_count": len(steps),
+    }
+
+
 @router.post("/{workflow_id}/run")
 async def trigger_run(workflow_id: str, user_id: str = Depends(get_user_id), db: AsyncSession = Depends(get_db)):
     result = await db.execute(

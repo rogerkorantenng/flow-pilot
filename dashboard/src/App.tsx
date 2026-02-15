@@ -13,6 +13,7 @@ import RunViewer from './pages/RunViewer';
 import Results from './pages/Results';
 import Templates from './pages/Templates';
 import Settings from './pages/Settings';
+import Guide from './pages/Guide';
 import NotFound from './pages/NotFound';
 
 export default function App() {
@@ -52,6 +53,7 @@ export default function App() {
           <Route path="/results" element={<Results />} />
           <Route path="/templates" element={<Templates />} />
           <Route path="/settings" element={<Settings />} />
+          <Route path="/guide" element={<Guide />} />
           <Route path="*" element={<NotFound />} />
         </Routes>
       </Layout>

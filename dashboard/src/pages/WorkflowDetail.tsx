@@ -20,6 +20,12 @@ import {
   ClipboardCopy,
   Check,
   BarChart3,
+  Share2,
+  Sparkles,
+  AlertTriangle,
+  Info,
+  TrendingDown,
+  ChevronDown,
 } from 'lucide-react';
 import {
   AreaChart,
@@ -33,8 +39,8 @@ import {
 import { useState } from 'react';
 import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
-import FlowGraph from '../components/FlowGraph';
-import { getWorkflow, triggerRun, listRuns, deleteWorkflow, cloneWorkflow } from '../services/api';
+import WorkflowCanvas from '../components/workflow/WorkflowCanvas';
+import { getWorkflow, triggerRun, listRuns, deleteWorkflow, cloneWorkflow, publishTemplate, generateInsights, type Insight } from '../services/api';
 import type { WorkflowStep } from '../types/workflow';
 
 const actionIcons: Record<string, React.ReactNode> = {
@@ -65,6 +71,11 @@ export default function WorkflowDetail() {
     queryFn: () => getWorkflow(id!),
     enabled: !!id,
   });
+
+  const [insights, setInsights] = useState<Insight[]>([]);
+  const [insightsSummary, setInsightsSummary] = useState('');
+  const [insightsLoading, setInsightsLoading] = useState(false);
+  const [publishCategory] = useState('general');
 
   const { data: runs = [] } = useQuery({
     queryKey: ['runs', id],
@@ -100,6 +111,30 @@ export default function WorkflowDetail() {
       navigate('/workflows');
     },
   });
+
+  const publishMutation = useMutation({
+    mutationFn: () => publishTemplate(id!, publishCategory),
+    onSuccess: () => {
+      toast.success('Published to marketplace!');
+      queryClient.invalidateQueries({ queryKey: ['templates'] });
+    },
+    onError: (err: Error & { response?: { data?: { detail?: string } } }) => {
+      toast.error(err.response?.data?.detail || 'Failed to publish');
+    },
+  });
+
+  const handleGetInsights = async () => {
+    setInsightsLoading(true);
+    try {
+      const res = await generateInsights({ workflow_id: id });
+      setInsights(res.insights);
+      setInsightsSummary(res.summary);
+    } catch {
+      toast.error('Failed to generate insights');
+    } finally {
+      setInsightsLoading(false);
+    }
+  };
 
   if (isLoading) {
     return (
@@ -202,6 +237,14 @@ export default function WorkflowDetail() {
             Clone
           </button>
           <button
+            className="btn-secondary flex items-center gap-2"
+            onClick={() => publishMutation.mutate()}
+            disabled={publishMutation.isPending}
+          >
+            {publishMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Share2 className="w-4 h-4" />}
+            Publish
+          </button>
+          <button
             className="btn-danger flex items-center gap-2"
             onClick={() => {
               if (confirm('Delete this workflow and all its runs?')) deleteMutation.mutate();
@@ -266,8 +309,60 @@ export default function WorkflowDetail() {
         </div>
       )}
 
-      {/* Visual Flow Graph */}
-      {steps.length > 0 && <FlowGraph steps={steps} />}
+      {/* Smart Insights */}
+      {runs.length > 0 && (
+        <div className="mb-6">
+          {insights.length > 0 || insightsSummary ? (
+            <div className="card p-5 bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200">
+              <div className="flex items-center gap-2 mb-3">
+                <Sparkles className="w-5 h-5 text-purple-600" />
+                <h3 className="font-semibold text-purple-900">AI Insights</h3>
+              </div>
+              {insightsSummary && (
+                <p className="text-sm text-purple-800 mb-4 leading-relaxed">{insightsSummary}</p>
+              )}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                {insights.map((insight, i) => (
+                  <div key={i} className={`bg-white rounded-lg p-4 border ${
+                    insight.severity === 'warning' ? 'border-amber-200' :
+                    insight.severity === 'success' ? 'border-green-200' :
+                    insight.severity === 'critical' ? 'border-red-200' : 'border-gray-200'
+                  }`}>
+                    <div className="flex items-center gap-2 mb-1.5">
+                      {insight.severity === 'warning' ? <AlertTriangle className="w-4 h-4 text-amber-500" /> :
+                       insight.severity === 'success' ? <TrendingUp className="w-4 h-4 text-green-500" /> :
+                       insight.severity === 'critical' ? <TrendingDown className="w-4 h-4 text-red-500" /> :
+                       <Info className="w-4 h-4 text-blue-500" />}
+                      <h4 className="text-sm font-semibold">{insight.title}</h4>
+                    </div>
+                    <p className="text-xs text-gray-600 leading-relaxed">{insight.description}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : (
+            <button
+              className="card p-4 w-full text-left flex items-center gap-3 hover:shadow-md transition-all bg-gradient-to-r from-purple-50 to-indigo-50 border-purple-200"
+              onClick={handleGetInsights}
+              disabled={insightsLoading}
+            >
+              {insightsLoading ? <Loader2 className="w-5 h-5 text-purple-500 animate-spin" /> : <Sparkles className="w-5 h-5 text-purple-500" />}
+              <div>
+                <span className="font-semibold text-purple-900 block">Generate AI Insights</span>
+                <span className="text-xs text-purple-600">Analyze extracted data for trends, alerts, and recommendations</span>
+              </div>
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Visual Flow Canvas */}
+      {steps.length > 0 && (
+        <div className="mb-6">
+          <h2 className="font-semibold mb-3">Visual Flow</h2>
+          <WorkflowCanvas steps={steps} readOnly height="420px" />
+        </div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Steps */}
@@ -360,33 +455,179 @@ export default function WorkflowDetail() {
 }
 
 function WebhookSection({ workflowId }: { workflowId: string }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null);
   const webhookUrl = `${window.location.origin}/api/workflows/webhook/${workflowId}`;
 
-  const handleCopy = () => {
-    navigator.clipboard.writeText(`curl -X POST ${webhookUrl}`);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+  const handleCopy = (text: string, label: string) => {
+    navigator.clipboard.writeText(text);
+    setCopied(label);
+    setTimeout(() => setCopied(null), 2000);
+  };
+
+  const handleTest = async () => {
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const res = await fetch(webhookUrl, { method: 'POST' });
+      if (res.ok) {
+        setTestResult({ ok: true, message: 'Webhook triggered successfully! Check the run viewer.' });
+      } else {
+        const data = await res.json().catch(() => ({ detail: 'Unknown error' }));
+        setTestResult({ ok: false, message: data.detail || `HTTP ${res.status}` });
+      }
+    } catch {
+      setTestResult({ ok: false, message: 'Network error — could not reach webhook endpoint' });
+    } finally {
+      setTesting(false);
+    }
   };
 
   return (
-    <div className="mb-6 card p-4">
-      <div className="flex items-center gap-2 mb-2">
-        <Link2 className="w-4 h-4 text-primary-600" />
-        <h3 className="text-sm font-semibold">Webhook Trigger</h3>
+    <div className="mb-6 card overflow-hidden">
+      {/* Header */}
+      <div
+        className="flex items-center justify-between p-4 cursor-pointer hover:bg-gray-50 transition-colors"
+        onClick={() => setShowDetails(!showDetails)}
+      >
+        <div className="flex items-center gap-2">
+          <div className="w-8 h-8 bg-indigo-50 rounded-lg flex items-center justify-center">
+            <Link2 className="w-4 h-4 text-indigo-600" />
+          </div>
+          <div>
+            <h3 className="text-sm font-semibold">Webhook Trigger</h3>
+            <p className="text-[11px] text-gray-400">Trigger via API from external services</p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[10px] px-2 py-0.5 rounded-full bg-green-100 text-green-700 font-medium">Active</span>
+          <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform ${showDetails ? 'rotate-180' : ''}`} />
+        </div>
       </div>
-      <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-        Trigger this workflow from external services using a POST request:
-      </p>
-      <div className="flex items-center gap-2">
-        <code className="flex-1 text-xs bg-gray-100 dark:bg-gray-800 rounded-lg px-3 py-2 font-mono text-gray-700 dark:text-gray-300 truncate">
-          curl -X POST {webhookUrl}
-        </code>
-        <button onClick={handleCopy} className="btn-secondary flex items-center gap-1.5 text-xs py-2">
-          {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
-          {copied ? 'Copied' : 'Copy'}
-        </button>
+
+      {/* Always-visible URL */}
+      <div className="px-4 pb-3">
+        <div className="flex items-center gap-2">
+          <code className="flex-1 text-xs bg-gray-100 rounded-lg px-3 py-2 font-mono text-gray-700 truncate">
+            POST {webhookUrl}
+          </code>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleCopy(`curl -X POST ${webhookUrl}`, 'curl'); }}
+            className="btn-secondary flex items-center gap-1.5 text-xs py-2"
+          >
+            {copied === 'curl' ? <Check className="w-3.5 h-3.5 text-green-500" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+            {copied === 'curl' ? 'Copied' : 'Copy cURL'}
+          </button>
+          <button
+            onClick={(e) => { e.stopPropagation(); handleTest(); }}
+            className="btn-primary flex items-center gap-1.5 text-xs py-2"
+            disabled={testing}
+          >
+            {testing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Play className="w-3.5 h-3.5" />}
+            Test
+          </button>
+        </div>
+
+        {testResult && (
+          <div className={`mt-2 text-xs rounded-lg px-3 py-2 flex items-center gap-2 ${
+            testResult.ok ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'
+          }`}>
+            {testResult.ok ? <CheckCircle className="w-3.5 h-3.5" /> : <AlertTriangle className="w-3.5 h-3.5" />}
+            {testResult.message}
+          </div>
+        )}
       </div>
+
+      {/* Expanded details */}
+      {showDetails && (
+        <div className="border-t border-gray-100 px-4 py-4 bg-gray-50/50">
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* cURL example */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-600 mb-2">cURL Example</h4>
+              <div className="relative">
+                <pre className="text-[11px] bg-gray-900 text-gray-100 rounded-lg p-3 font-mono overflow-x-auto">
+{`curl -X POST \\
+  ${webhookUrl}`}</pre>
+                <button
+                  className="absolute top-2 right-2 text-gray-400 hover:text-white"
+                  onClick={() => handleCopy(`curl -X POST ${webhookUrl}`, 'curl-full')}
+                >
+                  {copied === 'curl-full' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            {/* JavaScript example */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-600 mb-2">JavaScript / Node.js</h4>
+              <div className="relative">
+                <pre className="text-[11px] bg-gray-900 text-gray-100 rounded-lg p-3 font-mono overflow-x-auto">
+{`fetch('${webhookUrl}', {
+  method: 'POST',
+})`}</pre>
+                <button
+                  className="absolute top-2 right-2 text-gray-400 hover:text-white"
+                  onClick={() => handleCopy(`fetch('${webhookUrl}', { method: 'POST' })`, 'js')}
+                >
+                  {copied === 'js' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Python example */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-600 mb-2">Python</h4>
+              <div className="relative">
+                <pre className="text-[11px] bg-gray-900 text-gray-100 rounded-lg p-3 font-mono overflow-x-auto">
+{`import requests
+requests.post('${webhookUrl}')`}</pre>
+                <button
+                  className="absolute top-2 right-2 text-gray-400 hover:text-white"
+                  onClick={() => handleCopy(`import requests\nrequests.post('${webhookUrl}')`, 'python')}
+                >
+                  {copied === 'python' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <ClipboardCopy className="w-3.5 h-3.5" />}
+                </button>
+              </div>
+            </div>
+
+            {/* Integration tips */}
+            <div>
+              <h4 className="text-xs font-semibold text-gray-600 mb-2">Integration Ideas</h4>
+              <div className="space-y-1.5">
+                {[
+                  { label: 'GitHub Actions', desc: 'Trigger on push or PR merge' },
+                  { label: 'Zapier / Make', desc: 'Connect to 5000+ apps' },
+                  { label: 'Cron Job', desc: 'Schedule with system crontab' },
+                  { label: 'Slack Bot', desc: 'Trigger from slash commands' },
+                ].map((item) => (
+                  <div key={item.label} className="flex items-center gap-2 text-xs">
+                    <div className="w-1.5 h-1.5 rounded-full bg-indigo-400" />
+                    <span className="font-medium text-gray-700">{item.label}</span>
+                    <span className="text-gray-400">— {item.desc}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* Raw URL copy */}
+          <div className="mt-4 pt-3 border-t border-gray-200">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-gray-500">Raw URL:</span>
+              <code className="text-xs font-mono text-gray-600 flex-1 truncate">{webhookUrl}</code>
+              <button
+                className="text-xs text-primary-600 hover:underline"
+                onClick={() => handleCopy(webhookUrl, 'url')}
+              >
+                {copied === 'url' ? 'Copied!' : 'Copy URL'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

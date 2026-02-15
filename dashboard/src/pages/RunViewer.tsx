@@ -28,10 +28,11 @@ import {
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
+import WorkflowCanvas from '../components/workflow/WorkflowCanvas';
 import { useSSE } from '../hooks/useSSE';
 import ResultRenderer from '../components/ResultRenderer';
-import { getRun, retryStep, skipStep, abortRun, getRunSummary, getAIFix } from '../services/api';
-import type { SSEEvent, RunStep } from '../types/workflow';
+import { getRun, retryStep, skipStep, abortRun, getRunSummary, getAIFix, getWorkflow } from '../services/api';
+import type { SSEEvent, RunStep, WorkflowStep } from '../types/workflow';
 
 interface LogEntry {
   time: string;
@@ -79,6 +80,7 @@ export default function RunViewer() {
   const [aiFixLoading, setAiFixLoading] = useState(false);
   const [replaying, setReplaying] = useState(false);
   const [replayStep, setReplayStep] = useState(0);
+  const [healedSteps, setHealedSteps] = useState<Set<number>>(new Set());
   const replayTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const stepsRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
@@ -99,6 +101,17 @@ export default function RunViewer() {
   });
 
   const isLive = run?.status === 'running' || run?.status === 'pending';
+
+  // Fetch workflow steps for the visual canvas
+  const { data: workflow } = useQuery({
+    queryKey: ['workflow', run?.workflow_id],
+    queryFn: () => getWorkflow(run!.workflow_id),
+    enabled: !!run?.workflow_id,
+  });
+  const workflowSteps: WorkflowStep[] = (() => {
+    if (!workflow?.steps_json) return [];
+    try { return JSON.parse(workflow.steps_json); } catch { return []; }
+  })();
 
   const handleSSEEvent = useCallback(
     (event: SSEEvent) => {
@@ -136,6 +149,15 @@ export default function RunViewer() {
         }));
         setFailedStep(null);
         addLog('warning', `Step ${event.step_number || '?'} skipped`);
+      } else if (event.type === 'step_healed' && event.step_id) {
+        setLiveSteps((prev) => ({
+          ...prev,
+          [event.step_id!]: { status: 'completed' },
+        }));
+        setHealedSteps((prev) => new Set([...prev, event.step_number || 0]));
+        setFailedStep(null);
+        addLog('success', `Step ${event.step_number || '?'} healed by AI`);
+        toast.success('Step auto-healed by AI!');
       } else if (event.type === 'run_completed' || event.type === 'run_failed') {
         queryClient.invalidateQueries({ queryKey: ['run', id] });
         setLiveSteps({});
@@ -397,6 +419,22 @@ export default function RunViewer() {
           />
         </div>
       </div>
+
+      {/* Live Visual Flow */}
+      {workflowSteps.length > 0 && (
+        <div className="mb-6">
+          <WorkflowCanvas
+            steps={workflowSteps}
+            readOnly
+            height="320px"
+            runSteps={steps.map((s) => ({
+              step_number: s.step_number,
+              status: liveSteps[s.id]?.status || s.status,
+              healed: healedSteps.has(s.step_number),
+            }))}
+          />
+        </div>
+      )}
 
       {/* AI Summary */}
       {(summary || summaryLoading) && (
