@@ -212,20 +212,21 @@ async def find_element(page, target_description: str, *, timeout: int = 8000):
     desc = target_description.strip()
     desc_lower = desc.lower()
 
-    # 1. Pattern-based selectors
+    # 1. Pattern-based selectors — only return VISIBLE elements
     for pattern, selectors in _SELECTOR_MAP:
         if pattern.search(desc_lower):
             for sel in selectors:
                 try:
-                    loc = page.locator(sel).first
-                    if await loc.count() > 0:
+                    all_matches = page.locator(sel)
+                    count = await all_matches.count()
+                    # Check each match for visibility (not just .first)
+                    for idx in range(min(count, 5)):
+                        loc = all_matches.nth(idx)
                         try:
-                            await loc.wait_for(state="visible", timeout=3000)
-                            return loc
-                        except Exception:
-                            # Element exists but not visible - still try
-                            if await loc.is_enabled():
+                            if await loc.is_visible(timeout=1000):
                                 return loc
+                        except Exception:
+                            continue
                 except Exception:
                     continue
 
