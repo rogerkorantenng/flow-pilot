@@ -25,6 +25,7 @@ import {
   FileDown,
   Play,
   Pause,
+  Tv,
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 import StatusBadge from '../components/StatusBadge';
@@ -85,6 +86,12 @@ export default function RunViewer() {
   const stepsRef = useRef<HTMLDivElement>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
+  // Live browser feed state (WebSocket connects after isLive is known)
+  const [browserSrc, setBrowserSrc] = useState<string | null>(null);
+  const [browserConnected, setBrowserConnected] = useState(false);
+  const wsRef = useRef<WebSocket | null>(null);
+  const prevBlobUrl = useRef<string | null>(null);
+
   const addLog = useCallback((type: LogEntry['type'], message: string) => {
     const time = new Date().toLocaleTimeString('en', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
     setLogEntries((prev) => [...prev, { time, type, message }]);
@@ -101,6 +108,47 @@ export default function RunViewer() {
   });
 
   const isLive = run?.status === 'running' || run?.status === 'pending';
+
+  // Live browser feed via WebSocket — connect when run is live
+  useEffect(() => {
+    if (!isLive || !id) {
+      if (wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+        setBrowserConnected(false);
+      }
+      return;
+    }
+
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${protocol}://${window.location.host}/ws/runs/${id}/screen`);
+    ws.binaryType = 'arraybuffer';
+    wsRef.current = ws;
+
+    ws.onopen = () => setBrowserConnected(true);
+    ws.onclose = () => setBrowserConnected(false);
+    ws.onerror = () => setBrowserConnected(false);
+
+    ws.onmessage = (evt) => {
+      if (evt.data instanceof ArrayBuffer) {
+        const blob = new Blob([evt.data], { type: 'image/jpeg' });
+        const url = URL.createObjectURL(blob);
+        if (prevBlobUrl.current) URL.revokeObjectURL(prevBlobUrl.current);
+        prevBlobUrl.current = url;
+        setBrowserSrc(url);
+      }
+    };
+
+    return () => {
+      ws.close();
+      wsRef.current = null;
+      setBrowserConnected(false);
+      if (prevBlobUrl.current) {
+        URL.revokeObjectURL(prevBlobUrl.current);
+        prevBlobUrl.current = null;
+      }
+    };
+  }, [isLive, id]);
 
   // Fetch workflow steps for the visual canvas
   const { data: workflow } = useQuery({
@@ -128,6 +176,7 @@ export default function RunViewer() {
           [event.step_id!]: {
             status: 'completed',
             result_data: event.result ? JSON.stringify(event.result) : null,
+            screenshot_b64: event.screenshot_b64 ?? null,
           },
         }));
         addLog('success', `Step ${event.step_number || '?'} completed successfully`);
@@ -420,8 +469,48 @@ export default function RunViewer() {
         </div>
       </div>
 
-      {/* Live Visual Flow */}
-      {workflowSteps.length > 0 && (
+      {/* Live Browser Feed — shown during execution */}
+      {(isLive || browserSrc) && (
+        <div className="mb-6 card overflow-hidden">
+          <div className="flex items-center justify-between px-4 py-2.5 bg-gray-900 text-white">
+            <div className="flex items-center gap-2">
+              <Tv className="w-4 h-4" />
+              <span className="text-sm font-semibold">Live Browser</span>
+              {browserConnected && (
+                <span className="flex items-center gap-1 text-[10px] bg-green-600 text-white px-2 py-0.5 rounded-full">
+                  <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse" />
+                  LIVE
+                </span>
+              )}
+            </div>
+            <span className="text-xs text-gray-400">
+              {browserConnected ? '~3 fps stream' : isLive ? 'Connecting...' : 'Stream ended'}
+            </span>
+          </div>
+          <div className="bg-black flex items-center justify-center" style={{ minHeight: '360px' }}>
+            {browserSrc ? (
+              <img
+                src={browserSrc}
+                alt="Live browser view"
+                className="w-full max-h-[540px] object-contain"
+              />
+            ) : isLive ? (
+              <div className="flex flex-col items-center gap-3 text-gray-500">
+                <Loader2 className="w-8 h-8 animate-spin" />
+                <span className="text-sm">Waiting for browser to start...</span>
+              </div>
+            ) : (
+              <div className="flex flex-col items-center gap-2 text-gray-600">
+                <Monitor className="w-8 h-8" />
+                <span className="text-sm">Browser session ended</span>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Visual Flow — shown when not live or no browser feed */}
+      {workflowSteps.length > 0 && !isLive && !browserSrc && (
         <div className="mb-6">
           <WorkflowCanvas
             steps={workflowSteps}
@@ -545,25 +634,14 @@ export default function RunViewer() {
                 )}
               </div>
 
-              {/* Screenshot */}
-              {selected.screenshot_b64 ? (
+              {/* Step screenshot (final capture, shown when not streaming live) */}
+              {!isLive && (selected.screenshot_b64 || (selectedLive?.screenshot_b64 as string)) && (
                 <div className="border rounded-lg overflow-hidden mb-4">
                   <img
-                    src={`data:image/png;base64,${selected.screenshot_b64}`}
+                    src={`data:image/jpeg;base64,${(selectedLive?.screenshot_b64 as string) || selected.screenshot_b64}`}
                     alt="Step screenshot"
                     className="w-full"
                   />
-                </div>
-              ) : (
-                <div className="border border-dashed rounded-lg h-48 flex flex-col items-center justify-center text-gray-300 mb-4 bg-gray-50/50">
-                  <Monitor className="w-10 h-10 mb-2" />
-                  <span className="text-sm">
-                    {(selectedLive?.status || selected.status) === 'running'
-                      ? 'Step executing...'
-                      : (selectedLive?.status || selected.status) === 'pending'
-                      ? 'Waiting to execute'
-                      : 'No screenshot captured'}
-                  </span>
                 </div>
               )}
 

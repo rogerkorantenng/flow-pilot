@@ -265,10 +265,26 @@ def _simulate_chat(
 
     # ── CREATE WORKFLOW ──
     if _intent(msg, ["create", "build", "make", "generate"], ["workflow", "automation", "flow", "bot"]):
-        desc = _extract_description(message, msg)
+        name, desc = _extract_create_info(message, msg)
+        action: dict = {"type": "create_workflow", "description": desc or "", "name": name or ""}
+        if name and desc:
+            return (
+                f"Sure! I'll create **{name}** — *\"{desc}\"*. Let me guide you through the rest.",
+                action,
+            )
+        elif desc and len(desc) >= 5:
+            return (
+                f"Sure! Let's create a workflow for **\"{desc}\"**. I'll guide you through it step by step.",
+                action,
+            )
+        elif name:
+            return (
+                f"Sure! Let's create **{name}**. I'll guide you through it step by step.",
+                action,
+            )
         return (
-            f"I'll create a workflow for you: **\"{desc}\"**\n\nGenerating steps with AI now...",
-            {"type": "create_workflow", "description": desc},
+            "Sure! Let's create a new workflow. I'll guide you through it step by step.",
+            action,
         )
 
     # ── RUN WORKFLOW ──
@@ -575,22 +591,60 @@ def _intent(msg: str, verbs: list[str], nouns: list[str]) -> bool:
     return has_verb and has_noun
 
 
-def _extract_description(original: str, lower: str) -> str:
-    """Extract the workflow description from the user message."""
+def _extract_create_info(original: str, lower: str) -> tuple[str, str]:
+    """Extract workflow name and description from the user message.
+
+    Supports patterns like:
+      "create a workflow named LinkedIn Jobs that gets backend jobs"
+      "create a workflow called Price Monitor to check Amazon prices"
+      "create a workflow that checks prices" (no name)
+    Returns (name, description).
+    """
+    # Strip the verb prefix first
+    remainder = original
+    remainder_lower = lower
     for prefix in [
-        "create a workflow that ", "create a workflow to ", "create a workflow for ",
-        "create workflow that ", "create workflow to ", "create workflow for ",
-        "build a workflow that ", "build a workflow to ",
-        "make a workflow that ", "make a workflow to ",
-        "generate a workflow that ", "generate a workflow to ",
-        "create a workflow ", "build a workflow ", "make a workflow ",
-        "create workflow ", "build workflow ", "make workflow ",
+        "create a workflow ", "create workflow ", "build a workflow ",
+        "make a workflow ", "generate a workflow ",
         "create a ", "build a ", "make a ", "generate a ",
         "create ", "build ", "make ", "generate ",
     ]:
-        idx = lower.find(prefix)
+        idx = remainder_lower.find(prefix)
         if idx != -1:
-            desc = original[idx + len(prefix):].strip()
-            if desc and len(desc) >= 5:
-                return desc
-    return original
+            remainder = remainder[idx + len(prefix):].strip()
+            remainder_lower = remainder.lower()
+            break
+
+    # Try to extract "named X that/to/for/which ..." or "called X that/to/for/which ..."
+    name = ""
+    desc = remainder
+    name_pattern = re.match(
+        r'(?:named|called)\s+["\']?(.+?)["\']?\s+(?:that|to|for|which|and)\s+(.+)',
+        remainder_lower,
+    )
+    if name_pattern:
+        name_start = name_pattern.start(1)
+        name_end = name_pattern.end(1)
+        desc_start = name_pattern.start(2)
+        name = remainder[name_start:name_end].strip()
+        desc = remainder[desc_start:].strip()
+    else:
+        # Try "named X" without description connector
+        name_only = re.match(r'(?:named|called)\s+["\']?(.+?)["\']?\s*$', remainder_lower)
+        if name_only:
+            name = remainder[name_only.start(1):name_only.end(1)].strip()
+            desc = ""
+        else:
+            # No name — strip "that/to/for" prefixes from description
+            for conn in ["that ", "to ", "for ", "which "]:
+                if remainder_lower.startswith(conn):
+                    desc = remainder[len(conn):].strip()
+                    break
+
+    return (name, desc)
+
+
+def _extract_description(original: str, lower: str) -> str:
+    """Legacy helper — returns just the description."""
+    _, desc = _extract_create_info(original, lower)
+    return desc if desc and len(desc) >= 5 else original

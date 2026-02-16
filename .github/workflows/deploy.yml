@@ -1,0 +1,96 @@
+name: Deploy to AWS EC2
+
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  EC2_HOST: ec2-54-221-184-49.compute-1.amazonaws.com
+  EC2_USER: ubuntu
+  DEPLOY_PATH: /opt/flowpilot
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/flowpilot-key.pem
+          chmod 600 ~/.ssh/flowpilot-key.pem
+          ssh-keyscan -H ${{ env.EC2_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy to EC2
+        run: |
+          # Sync code to server (exclude dev files)
+          rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='venv' \
+            --exclude='node_modules' \
+            --exclude='dist' \
+            --exclude='__pycache__' \
+            --exclude='*.db' \
+            --exclude='*.pem' \
+            --exclude='.env' \
+            -e "ssh -i ~/.ssh/flowpilot-key.pem" \
+            ./ ${{ env.EC2_USER }}@${{ env.EC2_HOST }}:${{ env.DEPLOY_PATH }}/
+
+      - name: Build and restart containers
+        run: |
+          ssh -i ~/.ssh/flowpilot-key.pem ${{ env.EC2_USER }}@${{ env.EC2_HOST }} << 'EOF'
+          cd /opt/flowpilot
+          sudo docker compose build --parallel 2>&1
+          sudo docker compose up -d 2>&1
+
+          # Wait for backend health
+          echo "Waiting for backend..."
+          for i in $(seq 1 20); do
+            if curl -sf http://localhost:8000/health > /dev/null 2>&1; then
+              echo "Backend healthy!"
+              break
+            fi
+            sleep 5
+          done
+          EOF
+
+      - name: Verify deployment
+        run: |
+          ssh -i ~/.ssh/flowpilot-key.pem ${{ env.EC2_USER }}@${{ env.EC2_HOST }} << 'EOF'
+          echo "=== Container Status ==="
+          sudo docker compose -f /opt/flowpilot/docker-compose.yml ps
+
+          echo "=== Health Check ==="
+          HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost:8000/health)
+          if [ "$HTTP_CODE" = "200" ]; then
+            echo "Backend: OK (200)"
+          else
+            echo "Backend: FAILED ($HTTP_CODE)"
+            exit 1
+          fi
+
+          DASH_CODE=$(curl -s -o /dev/null -w "%{http_code}" http://localhost)
+          if [ "$DASH_CODE" = "200" ]; then
+            echo "Dashboard: OK (200)"
+          else
+            echo "Dashboard: FAILED ($DASH_CODE)"
+            exit 1
+          fi
+
+          echo "=== Deploy verified ==="
+          EOF
+
+      - name: Invalidate CloudFront cache
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: us-east-1
+        run: |
+          aws cloudfront create-invalidation \
+            --distribution-id ESJDUQB2AP69M \
+            --paths "/*" \
+            --query "Invalidation.Id" --output text
+          echo "CloudFront cache invalidated"

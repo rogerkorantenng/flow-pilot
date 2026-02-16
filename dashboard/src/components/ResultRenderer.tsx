@@ -337,8 +337,8 @@ function SearchRenderer({ results, total, time }: { results: Array<Record<string
         {results.map((r, i) => (
           <div key={i} className="group">
             <p className="text-sm font-medium text-blue-700 group-hover:underline cursor-pointer">{String(r.title)}</p>
-            <p className="text-xs text-green-700 truncate">{String(r.url)}</p>
-            <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{String(r.snippet)}</p>
+            {r.url && <p className="text-xs text-green-700 truncate">{String(r.url)}</p>}
+            {r.snippet && <p className="text-xs text-gray-500 mt-0.5 line-clamp-2">{String(r.snippet)}</p>}
           </div>
         ))}
       </div>
@@ -528,6 +528,126 @@ function ConfirmationRenderer({ data }: { data: Record<string, any> }) {
   );
 }
 
+// ── Page Content (structured sections from browser extraction) ───────
+function PageContentRenderer({ data }: { data: Record<string, any> }) {
+  const sections = data.sections as Array<{ heading: string; items: Array<{ text: string; link?: string }> }> | undefined;
+  const tables = data.tables as Array<{ headers: string[]; rows: string[][] }> | undefined;
+  const source = data.source as string | undefined;
+
+  return (
+    <div>
+      <div className="flex items-center justify-between mb-3">
+        <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">
+          <Globe className="w-3.5 h-3.5 inline mr-1" />
+          {data.page_title ? String(data.page_title) : 'Page Content'}
+        </span>
+        {source && <span className="text-xs text-blue-500">{source}</span>}
+        {data.items_extracted && (
+          <span className="text-xs text-gray-400">{String(data.items_extracted)} items</span>
+        )}
+      </div>
+
+      {sections && sections.length > 0 && (
+        <div className="space-y-3">
+          {sections.map((section, si) => (
+            <div key={si}>
+              {section.heading && (
+                <h4 className="text-xs font-bold text-gray-700 uppercase tracking-wide mb-1.5 flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 rounded-full bg-primary-400" />
+                  {section.heading}
+                </h4>
+              )}
+              <div className="space-y-1">
+                {section.items.map((item, ii) => (
+                  <div key={ii} className="text-sm text-gray-700 pl-3 border-l-2 border-gray-100 py-0.5">
+                    {item.link ? (
+                      <a
+                        href={item.link}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-blue-600 hover:underline"
+                      >
+                        {item.text}
+                      </a>
+                    ) : (
+                      item.text
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tables && tables.length > 0 && tables.map((table, ti) => (
+        <div key={ti} className="mt-3 overflow-hidden rounded-lg border border-gray-200">
+          <table className="w-full text-sm">
+            {table.headers && table.headers.length > 0 && (
+              <thead className="bg-gray-50">
+                <tr>
+                  {table.headers.map((h, hi) => (
+                    <th key={hi} className="text-left px-3 py-2 text-xs font-semibold text-gray-500">{h}</th>
+                  ))}
+                </tr>
+              </thead>
+            )}
+            <tbody className="divide-y divide-gray-100">
+              {table.rows.map((row, ri) => (
+                <tr key={ri} className="hover:bg-gray-50">
+                  {row.map((cell, ci) => (
+                    <td key={ci} className="px-3 py-2 text-gray-700">{cell}</td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+// ── Smart value renderer (never shows raw JSON) ─────────────────────
+function SmartValue({ value }: { value: unknown }) {
+  if (value === null || value === undefined) return <span className="text-gray-300 italic">none</span>;
+  if (typeof value === 'boolean') return <span className={value ? 'text-green-600 font-semibold' : 'text-red-500'}>{value ? 'Yes' : 'No'}</span>;
+  if (typeof value === 'number') return <span className="font-semibold text-gray-800">{value.toLocaleString()}</span>;
+  if (typeof value === 'string') {
+    if (value.startsWith('http')) return <a href={value} target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline break-all">{value}</a>;
+    return <span className="text-gray-700">{value}</span>;
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-gray-300 italic">empty</span>;
+    // Render as bullet list
+    return (
+      <ul className="list-disc list-inside space-y-0.5">
+        {value.slice(0, 10).map((item, i) => (
+          <li key={i} className="text-gray-700 text-sm">
+            {typeof item === 'object' ? Object.values(item as Record<string, unknown>).filter(v => typeof v === 'string' || typeof v === 'number').join(' — ') : String(item)}
+          </li>
+        ))}
+        {value.length > 10 && <li className="text-gray-400 text-xs">+{value.length - 10} more</li>}
+      </ul>
+    );
+  }
+  if (typeof value === 'object') {
+    const entries = Object.entries(value as Record<string, unknown>);
+    return (
+      <div className="grid grid-cols-2 gap-x-4 gap-y-1 pl-2 border-l-2 border-gray-100">
+        {entries.slice(0, 8).map(([k, v]) => (
+          <div key={k} className="contents">
+            <span className="text-xs text-gray-400">{k.replace(/_/g, ' ')}</span>
+            <span className="text-sm text-gray-700">{typeof v === 'object' ? (Array.isArray(v) ? `${(v as unknown[]).length} items` : 'object') : String(v ?? '')}</span>
+          </div>
+        ))}
+        {entries.length > 8 && <span className="col-span-2 text-xs text-gray-400">+{entries.length - 8} more fields</span>}
+      </div>
+    );
+  }
+  return <span className="text-gray-700">{String(value)}</span>;
+}
+
 // ── Main dispatcher ──────────────────────────────────────────────────
 export default function ResultRenderer({ data, action }: Props) {
   // Action-based simple renderers
@@ -559,7 +679,7 @@ export default function ResultRenderer({ data, action }: Props) {
   if (data.profiles && Array.isArray(data.profiles)) {
     return <LeadsRenderer profiles={data.profiles as Array<Record<string, any>>} quality={data.match_quality as string} />;
   }
-  if (data.results && Array.isArray(data.results) && (data.results as Array<Record<string, any>>)[0]?.snippet) {
+  if (data.results && Array.isArray(data.results)) {
     return <SearchRenderer results={data.results as Array<Record<string, any>>} total={data.total_results as string} time={data.search_time as string} />;
   }
   if (data.company && data.industry) {
@@ -572,19 +692,24 @@ export default function ResultRenderer({ data, action }: Props) {
     return <ConfirmationRenderer data={data} />;
   }
 
-  // Fallback: formatted key-value pairs
+  // Page content with sections (from browser extraction)
+  if (data.sections && Array.isArray(data.sections)) {
+    return <PageContentRenderer data={data} />;
+  }
+
+  // Fallback: clean key-value pairs (no raw JSON ever)
+  const displayEntries = Object.entries(data).filter(
+    ([key]) => !['live', 'simulated', 'source_url', 'scraped_at'].includes(key)
+  );
+
   return (
-    <div className="space-y-1.5">
-      {Object.entries(data).map(([key, value]) => (
-        <div key={key} className="flex items-start gap-2 text-sm">
-          <span className="text-xs font-semibold text-gray-500 min-w-[100px] pt-0.5">{key.replace(/_/g, ' ')}</span>
-          <span className="text-gray-700">
-            {typeof value === 'object' ? (
-              <code className="text-xs bg-gray-50 rounded px-2 py-0.5 font-mono">{JSON.stringify(value)}</code>
-            ) : (
-              String(value)
-            )}
-          </span>
+    <div className="space-y-2.5">
+      {displayEntries.map(([key, value]) => (
+        <div key={key} className="flex items-start gap-3 text-sm">
+          <span className="text-xs font-semibold text-gray-500 min-w-[100px] pt-0.5 capitalize">{key.replace(/_/g, ' ')}</span>
+          <div className="flex-1">
+            <SmartValue value={value} />
+          </div>
         </div>
       ))}
     </div>

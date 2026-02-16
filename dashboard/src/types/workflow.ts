@@ -97,6 +97,7 @@ export interface SSEEvent {
   result?: Record<string, unknown>;
   error?: string;
   total_steps?: number;
+  screenshot_b64?: string | null;
 }
 
 export interface AuthResponse {

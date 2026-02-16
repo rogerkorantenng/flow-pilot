@@ -39,6 +39,7 @@ from app.api.chat import router as chat_router
 from app.api.insights import router as insights_router
 from app.api.results import router as results_router
 from app.api.runs import router as runs_router
+from app.api.screen import router as screen_router
 from app.api.templates import router as templates_router
 from app.api.users import router as users_router
 from app.api.workflows import router as workflows_router
@@ -50,6 +51,7 @@ app.include_router(templates_router)
 app.include_router(results_router)
 app.include_router(chat_router)
 app.include_router(insights_router)
+app.include_router(screen_router)
 
 
 @app.get("/health")

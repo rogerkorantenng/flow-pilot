@@ -48,7 +48,7 @@ PLAN_TEMPLATES = {
     "news": {
         "keywords": ["news", "headline", "article", "digest", "report", "story", "hacker news"],
         "steps": [
-            {"step_number": 1, "action": "navigate", "target": "https://news.google.com", "description": "Open Google News"},
+            {"step_number": 1, "action": "navigate", "target": "https://news.ycombinator.com", "description": "Open Hacker News"},
             {"step_number": 2, "action": "type", "target": "Search input", "value": "{query}", "description": "Search for the topic"},
             {"step_number": 3, "action": "extract", "target": "Extract top 5 news headlines with sources, authors, and timestamps", "description": "Extract top news headlines"},
             {"step_number": 4, "action": "navigate", "target": "https://techcrunch.com", "description": "Open TechCrunch"},
@@ -110,7 +110,7 @@ PLAN_TEMPLATES = {
             {"step_number": 2, "action": "type", "target": "Search bar", "value": "{query}", "description": "Search for the person"},
             {"step_number": 3, "action": "click", "target": "First matching profile result", "description": "Open profile"},
             {"step_number": 4, "action": "extract", "target": "Extract name, title, company, location, connections from LinkedIn profile", "description": "Extract profile data"},
-            {"step_number": 5, "action": "navigate", "target": "https://www.google.com", "description": "Open Google"},
+            {"step_number": 5, "action": "navigate", "target": "https://duckduckgo.com", "description": "Open Google"},
             {"step_number": 6, "action": "type", "target": "Search input", "value": "{query} company", "description": "Search for company info"},
             {"step_number": 7, "action": "extract", "target": "Extract company size, industry, funding, headquarters from search results", "description": "Extract company details"},
         ],
@@ -118,7 +118,7 @@ PLAN_TEMPLATES = {
     "research": {
         "keywords": ["find", "look up", "search", "learn", "info", "research", "google"],
         "steps": [
-            {"step_number": 1, "action": "navigate", "target": "https://www.google.com", "description": "Open Google search"},
+            {"step_number": 1, "action": "navigate", "target": "https://duckduckgo.com", "description": "Open Google search"},
             {"step_number": 2, "action": "type", "target": "Search input", "value": "{query}", "description": "Search for the topic"},
             {"step_number": 3, "action": "extract", "target": "Extract top 5 search results with titles, URLs, and snippets", "description": "Extract search results"},
             {"step_number": 4, "action": "click", "target": "Most relevant search result", "description": "Open the top result"},
@@ -131,7 +131,7 @@ PLAN_TEMPLATES = {
 }
 
 DEFAULT_STEPS = [
-    {"step_number": 1, "action": "navigate", "target": "https://www.google.com", "description": "Open Google search"},
+    {"step_number": 1, "action": "navigate", "target": "https://duckduckgo.com", "description": "Open Google search"},
     {"step_number": 2, "action": "type", "target": "Search input", "value": "{query}", "description": "Search for relevant information"},
     {"step_number": 3, "action": "extract", "target": "Extract search results, titles, URLs, and snippets", "description": "Extract search results"},
     {"step_number": 4, "action": "click", "target": "Most relevant result link", "description": "Open the best matching result"},
@@ -232,7 +232,7 @@ class PlannerService:
                 if user_urls:
                     step["target"] = user_urls[0]
                 else:
-                    step["target"] = f"https://www.google.com/search?q={query.replace(' ', '+')}"
+                    step["target"] = f"https://duckduckgo.com/search?q={query.replace(' ', '+')}"
 
         # If user provided URLs, ensure the first navigate goes to their URL
         if user_urls and plan and plan[0]["action"] == "navigate":
