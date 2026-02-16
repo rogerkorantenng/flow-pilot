@@ -250,14 +250,19 @@ async def _find_visible(page, selector: str):
     return None
 
 
-async def find_element(page, target_description: str, *, timeout: int = 8000):
+async def find_element(page, target_description: str, *, action: str = "", timeout: int = 8000):
     """Locate a page element from a descriptive target string.
 
     Tries pattern-matched selectors first, then falls back to text
     matching and generic role-based finding. Retries once after waiting
     if the element isn't found initially.
+
+    Args:
+        action: The action to perform ("click", "type", etc.). Used to
+                filter fallback elements — e.g. "type" only returns
+                fillable elements like input/textarea/select.
     """
-    result = await _find_element_inner(page, target_description)
+    result = await _find_element_inner(page, target_description, action=action)
     if result:
         return result
 
@@ -292,15 +297,15 @@ async def find_element(page, target_description: str, *, timeout: int = 8000):
             except Exception:
                 continue
 
-    result = await _find_element_inner(page, target_description)
+    result = await _find_element_inner(page, target_description, action=action)
     if result:
         return result
 
     # ── AI-powered element finding (final fallback) ──
-    return await _ai_find_element(page, target_description)
+    return await _ai_find_element(page, target_description, action=action)
 
 
-async def _ai_find_element(page, target_description: str):
+async def _ai_find_element(page, target_description: str, *, action: str = ""):
     """Use Nova AI vision model to locate an element on the page.
 
     Takes a screenshot, asks AI to identify a CSS selector for the target
@@ -338,12 +343,18 @@ async def _ai_find_element(page, target_description: str):
             }));
         }""")
 
+        action_hint = ""
+        if action == "type":
+            action_hint = "\nIMPORTANT: The action is TYPE/FILL — you MUST return an <input>, <textarea>, <select>, or [contenteditable] element. Do NOT return links (<a>) or buttons."
+        elif action == "click":
+            action_hint = "\nThe action is CLICK — return a clickable element (link, button, or interactive element)."
+
         prompt = f"""I need to find this element on the page: "{target_description}"
 
 Here are the interactive elements on the page:
 {_format_elements(elements_info)}
 
-Look at the screenshot and the element list. Which element best matches "{target_description}"?
+Look at the screenshot and the element list. Which element best matches "{target_description}"?{action_hint}
 
 Return ONLY a JSON object with:
 - "selector": a CSS selector that uniquely identifies the correct element
@@ -417,7 +428,7 @@ def _format_elements(elements: list) -> str:
     return "\n".join(lines) if lines else "(no visible interactive elements found)"
 
 
-async def _find_element_inner(page, target_description: str):
+async def _find_element_inner(page, target_description: str, *, action: str = ""):
     """Core element finding logic."""
     desc = target_description.strip()
     desc_lower = desc.lower()
@@ -508,8 +519,15 @@ async def _find_element_inner(page, target_description: str):
         except Exception:
             continue
 
-    # 7. Last resort — any interactable element
-    for fallback in ["a:visible", "button:visible", "input:visible"]:
+    # 7. Last resort — any interactable element (filtered by action type)
+    if action == "type":
+        # Only return fillable elements for type/fill actions
+        fallbacks = ["input:visible", "textarea:visible", "select:visible", "[contenteditable]:visible"]
+    elif action == "click":
+        fallbacks = ["a:visible", "button:visible", "[role='button']:visible"]
+    else:
+        fallbacks = ["a:visible", "button:visible", "input:visible"]
+    for fallback in fallbacks:
         loc = await _find_visible(page, fallback)
         if loc:
             return loc

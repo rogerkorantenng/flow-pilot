@@ -698,6 +698,7 @@ class ExecutorService:
         """Execute a step using a real Playwright browser page."""
         from app.services.browser_service import (
             find_element, extract_page_content, navigate_with_fallback, is_blocked,
+            _find_visible,
         )
 
         t0 = time.monotonic()
@@ -709,7 +710,7 @@ class ExecutorService:
 
         elif step.action == "click":
             target = step.target or "button"
-            element = await find_element(page, target)
+            element = await find_element(page, target, action="click")
             if not element:
                 raise Exception(f"ElementNotFound: Could not locate '{target}' on the page")
 
@@ -739,9 +740,34 @@ class ExecutorService:
         elif step.action == "type":
             target = step.target or "input"
             value = step.value or ""
-            element = await find_element(page, target)
+            element = await find_element(page, target, action="type")
             if not element:
                 raise Exception(f"ElementNotFound: Could not locate input '{target}' on the page")
+
+            # Safety: verify element is fillable before calling .fill()
+            try:
+                tag = await element.evaluate("el => el.tagName.toLowerCase()")
+            except Exception:
+                tag = "unknown"
+            fillable_tags = {"input", "textarea", "select"}
+            if tag not in fillable_tags:
+                # Check for contenteditable
+                is_editable = False
+                try:
+                    is_editable = await element.evaluate(
+                        "el => el.isContentEditable"
+                    )
+                except Exception:
+                    pass
+                if not is_editable:
+                    # Try to find an input/textarea inside the element
+                    inner = await _find_visible(page, f"{tag} input:visible, {tag} textarea:visible") if tag != "unknown" else None
+                    if not inner:
+                        inner = await _find_visible(page, "input:visible, textarea:visible")
+                    if inner:
+                        element = inner
+                    else:
+                        raise Exception(f"ElementNotFound: Found '{tag}' element for '{target}' but it's not fillable (need input/textarea/select)")
 
             await element.click(timeout=5000)
             await element.fill(value, timeout=5000)
