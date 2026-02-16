@@ -203,12 +203,70 @@ _SELECTOR_MAP: list[tuple[re.Pattern, list[str]]] = [
 ]
 
 
+async def _find_visible(page, selector: str):
+    """Return the first visible element matching a selector, or None."""
+    try:
+        all_matches = page.locator(selector)
+        count = await all_matches.count()
+        for idx in range(min(count, 5)):
+            loc = all_matches.nth(idx)
+            try:
+                if await loc.is_visible(timeout=800):
+                    return loc
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return None
+
+
 async def find_element(page, target_description: str, *, timeout: int = 8000):
     """Locate a page element from a descriptive target string.
 
     Tries pattern-matched selectors first, then falls back to text
-    matching and generic role-based finding.
+    matching and generic role-based finding. Retries once after waiting
+    if the element isn't found initially.
     """
+    result = await _find_element_inner(page, target_description)
+    if result:
+        return result
+
+    # Element not found — wait for page to settle and retry once
+    logger.info(f"Element '{target_description}' not found on first try, waiting and retrying...")
+    try:
+        await page.wait_for_load_state("networkidle", timeout=5000)
+    except Exception:
+        pass
+    await page.wait_for_timeout(1500)
+
+    # For search-related targets, try clicking common search toggle icons first
+    desc_lower = target_description.lower()
+    if any(w in desc_lower for w in ("search", "query", "find")):
+        for toggle_sel in [
+            'button[aria-label*="earch" i]',
+            'a[aria-label*="earch" i]',
+            '[role="search"] button',
+            '.search-toggle',
+            '.search-icon',
+            'button.search',
+            'a.search',
+            'svg.search-icon',
+        ]:
+            try:
+                toggle = await _find_visible(page, toggle_sel)
+                if toggle:
+                    await toggle.click(timeout=3000)
+                    await page.wait_for_timeout(800)
+                    logger.info(f"Clicked search toggle: {toggle_sel}")
+                    break
+            except Exception:
+                continue
+
+    return await _find_element_inner(page, target_description)
+
+
+async def _find_element_inner(page, target_description: str):
+    """Core element finding logic."""
     desc = target_description.strip()
     desc_lower = desc.lower()
 
@@ -216,21 +274,46 @@ async def find_element(page, target_description: str, *, timeout: int = 8000):
     for pattern, selectors in _SELECTOR_MAP:
         if pattern.search(desc_lower):
             for sel in selectors:
-                try:
-                    all_matches = page.locator(sel)
-                    count = await all_matches.count()
-                    # Check each match for visibility (not just .first)
-                    for idx in range(min(count, 5)):
-                        loc = all_matches.nth(idx)
-                        try:
-                            if await loc.is_visible(timeout=1000):
-                                return loc
-                        except Exception:
-                            continue
-                except Exception:
-                    continue
+                loc = await _find_visible(page, sel)
+                if loc:
+                    return loc
 
-    # 2. Try quoted text inside the description  e.g. click "Apply Now"
+    # 2. Playwright role-based search (aria, label, placeholder)
+    is_search = any(w in desc_lower for w in ("search", "query", "find"))
+    is_input = any(w in desc_lower for w in ("input", "field", "text", "type", "enter", "search"))
+    is_button = any(w in desc_lower for w in ("button", "btn", "click", "submit", "press"))
+    is_link = any(w in desc_lower for w in ("link", "result", "anchor"))
+
+    if is_search or is_input:
+        # Try role-based search input
+        for role in ["searchbox", "textbox"]:
+            try:
+                loc = page.get_by_role(role).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    return loc
+            except Exception:
+                pass
+        # Try by placeholder text
+        for ph in ["search", "find", "query", "type to search", "what are you looking for"]:
+            try:
+                loc = page.get_by_placeholder(re.compile(ph, re.I)).first
+                if await loc.count() > 0 and await loc.is_visible():
+                    return loc
+            except Exception:
+                pass
+        # Try by label
+        try:
+            loc = page.get_by_label(re.compile("search", re.I)).first
+            if await loc.count() > 0 and await loc.is_visible():
+                return loc
+        except Exception:
+            pass
+        # Any visible input or textarea
+        loc = await _find_visible(page, "input:visible, textarea:visible")
+        if loc:
+            return loc
+
+    # 3. Try quoted text inside the description  e.g. click "Apply Now"
     quoted = re.findall(r'"([^"]+)"', desc)
     for q in quoted:
         try:
@@ -240,9 +323,8 @@ async def find_element(page, target_description: str, *, timeout: int = 8000):
         except Exception:
             continue
 
-    # 3. Try get_by_role for buttons
-    if any(w in desc_lower for w in ("button", "btn", "click", "submit", "press")):
-        # Extract meaningful text for the button
+    # 4. Try get_by_role for buttons
+    if is_button:
         btn_text = re.sub(r"\b(button|btn|click|press|the|a|an)\b", "", desc_lower, flags=re.I).strip()
         if btn_text:
             try:
@@ -251,35 +333,21 @@ async def find_element(page, target_description: str, *, timeout: int = 8000):
                     return loc
             except Exception:
                 pass
-        try:
-            loc = page.get_by_role("button").first
-            if await loc.count() > 0 and await loc.is_visible():
-                return loc
-        except Exception:
-            pass
+        loc = await _find_visible(page, "button:visible")
+        if loc:
+            return loc
 
-    # 4. Try get_by_role for links
-    if any(w in desc_lower for w in ("link", "result", "anchor")):
-        try:
-            loc = page.get_by_role("link").first
-            if await loc.count() > 0 and await loc.is_visible():
-                return loc
-        except Exception:
-            pass
-
-    # 5. Try visible input / textarea (for type actions)
-    if any(w in desc_lower for w in ("input", "field", "text", "type", "enter")):
-        try:
-            loc = page.locator("input:visible, textarea:visible").first
-            if await loc.count() > 0:
-                return loc
-        except Exception:
-            pass
+    # 5. Try get_by_role for links
+    if is_link:
+        loc = await _find_visible(page, "a:visible")
+        if loc:
+            return loc
 
     # 6. Generic text search — use the longest meaningful word
-    meaningful = [w for w in desc.split() if len(w) > 3 and w.lower() not in
-                  {"from", "with", "that", "this", "into", "them", "first", "click",
-                   "open", "find", "page", "button", "input", "field", "link", "extract"}]
+    stop_words = {"from", "with", "that", "this", "into", "them", "first", "click",
+                  "open", "find", "page", "button", "input", "field", "link", "extract",
+                  "search", "type", "enter"}
+    meaningful = [w for w in desc.split() if len(w) > 3 and w.lower() not in stop_words]
     for word in sorted(meaningful, key=len, reverse=True)[:3]:
         try:
             loc = page.get_by_text(word, exact=False).first
@@ -288,14 +356,11 @@ async def find_element(page, target_description: str, *, timeout: int = 8000):
         except Exception:
             continue
 
-    # 7. Last resort — try any interactable element
+    # 7. Last resort — any interactable element
     for fallback in ["a:visible", "button:visible", "input:visible"]:
-        try:
-            loc = page.locator(fallback).first
-            if await loc.count() > 0:
-                return loc
-        except Exception:
-            continue
+        loc = await _find_visible(page, fallback)
+        if loc:
+            return loc
 
     return None
 
