@@ -203,8 +203,36 @@ _SELECTOR_MAP: list[tuple[re.Pattern, list[str]]] = [
 ]
 
 
+async def _is_honeypot(loc) -> bool:
+    """Check if an element is a honeypot/trap field that should be skipped."""
+    try:
+        attrs = await loc.evaluate("""el => ({
+            ariaHidden: el.getAttribute('aria-hidden'),
+            tabIndex: el.tabIndex,
+            className: el.className || '',
+            type: el.type || '',
+            autocomplete: el.getAttribute('autocomplete') || '',
+            width: el.offsetWidth,
+            height: el.offsetHeight,
+        })""")
+        if attrs.get("ariaHidden") == "true":
+            return True
+        if attrs.get("tabIndex", 0) == -1 and "hidden" in attrs.get("className", "").lower():
+            return True
+        cls = attrs.get("className", "").lower()
+        if any(w in cls for w in ("visually-hidden", "sr-only", "hidden", "honeypot", "trap")):
+            return True
+        if attrs.get("width", 1) < 2 or attrs.get("height", 1) < 2:
+            return True
+        if attrs.get("autocomplete") == "off" and attrs.get("tabIndex", 0) == -1:
+            return True
+    except Exception:
+        pass
+    return False
+
+
 async def _find_visible(page, selector: str):
-    """Return the first visible element matching a selector, or None."""
+    """Return the first visible, non-honeypot element matching a selector, or None."""
     try:
         all_matches = page.locator(selector)
         count = await all_matches.count()
@@ -212,6 +240,8 @@ async def _find_visible(page, selector: str):
             loc = all_matches.nth(idx)
             try:
                 if await loc.is_visible(timeout=800):
+                    if await _is_honeypot(loc):
+                        continue
                     return loc
             except Exception:
                 continue
@@ -262,7 +292,129 @@ async def find_element(page, target_description: str, *, timeout: int = 8000):
             except Exception:
                 continue
 
-    return await _find_element_inner(page, target_description)
+    result = await _find_element_inner(page, target_description)
+    if result:
+        return result
+
+    # ── AI-powered element finding (final fallback) ──
+    return await _ai_find_element(page, target_description)
+
+
+async def _ai_find_element(page, target_description: str):
+    """Use Nova AI vision model to locate an element on the page.
+
+    Takes a screenshot, asks AI to identify a CSS selector for the target
+    element, then uses the suggested selector.
+    """
+    try:
+        from app.services.nova_service import NovaService, ThrottledError
+        nova = NovaService()
+        if nova._is_throttled():
+            return None
+    except Exception:
+        return None
+
+    try:
+        import base64 as b64
+
+        # Take a screenshot for the AI to analyze
+        png_bytes = await page.screenshot(type="png", full_page=False)
+        screenshot_b64 = b64.b64encode(png_bytes).decode("ascii")
+
+        # Also get the page's interactive elements for context
+        elements_info = await page.evaluate("""() => {
+            const els = document.querySelectorAll('input, textarea, button, select, a, [role="button"], [role="searchbox"], [role="textbox"]');
+            return Array.from(els).slice(0, 30).map((el, i) => ({
+                idx: i,
+                tag: el.tagName.toLowerCase(),
+                type: el.type || '',
+                name: el.name || '',
+                id: el.id || '',
+                placeholder: el.placeholder || '',
+                ariaLabel: el.getAttribute('aria-label') || '',
+                className: (el.className || '').toString().substring(0, 80),
+                visible: el.offsetWidth > 0 && el.offsetHeight > 0,
+                text: (el.innerText || el.value || '').substring(0, 50),
+            }));
+        }""")
+
+        prompt = f"""I need to find this element on the page: "{target_description}"
+
+Here are the interactive elements on the page:
+{_format_elements(elements_info)}
+
+Look at the screenshot and the element list. Which element best matches "{target_description}"?
+
+Return ONLY a JSON object with:
+- "selector": a CSS selector that uniquely identifies the correct element
+- "reason": brief explanation of why this element matches
+
+The selector must target a VISIBLE, REAL element (not a honeypot or hidden field).
+Return ONLY valid JSON, nothing else."""
+
+        system = "You are a browser automation expert. Given a screenshot and element list, identify the correct interactive element. Return ONLY valid JSON."
+
+        import asyncio as _aio
+        raw = await _aio.to_thread(nova._invoke_image, prompt, screenshot_b64, system, 256)
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+            if text.endswith("```"):
+                text = text[:-3]
+            text = text.strip()
+
+        import json
+        result = json.loads(text)
+        selector = result.get("selector", "")
+        reason = result.get("reason", "")
+
+        if selector:
+            logger.info(f"AI suggested selector: {selector} — {reason}")
+            loc = await _find_visible(page, selector)
+            if loc:
+                logger.info(f"AI-found element with: {selector}")
+                return loc
+
+            # Try without visibility check as AI is more trustworthy
+            try:
+                loc = page.locator(selector).first
+                if await loc.count() > 0:
+                    logger.info(f"AI-found element (unchecked visibility): {selector}")
+                    return loc
+            except Exception:
+                pass
+
+        logger.warning(f"AI element finding failed — no match for selector: {selector}")
+    except ThrottledError:
+        logger.warning("AI element finding skipped — Nova API throttled")
+    except Exception as e:
+        logger.warning(f"AI element finding failed: {e}")
+
+    return None
+
+
+def _format_elements(elements: list) -> str:
+    """Format element info list for the AI prompt."""
+    lines = []
+    for el in elements:
+        if not el.get("visible"):
+            continue
+        parts = [f"[{el['idx']}] <{el['tag']}"]
+        if el.get("type"):
+            parts.append(f' type="{el["type"]}"')
+        if el.get("id"):
+            parts.append(f' id="{el["id"]}"')
+        if el.get("name"):
+            parts.append(f' name="{el["name"]}"')
+        if el.get("placeholder"):
+            parts.append(f' placeholder="{el["placeholder"]}"')
+        if el.get("ariaLabel"):
+            parts.append(f' aria-label="{el["ariaLabel"]}"')
+        parts.append(">")
+        if el.get("text"):
+            parts.append(f' "{el["text"]}"')
+        lines.append("".join(parts))
+    return "\n".join(lines) if lines else "(no visible interactive elements found)"
 
 
 async def _find_element_inner(page, target_description: str):
