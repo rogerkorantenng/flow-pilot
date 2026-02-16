@@ -32,6 +32,7 @@ async def get_browser():
                 "--no-sandbox",
                 "--disable-setuid-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-gpu",
                 "--disable-blink-features=AutomationControlled",
             ],
         )
@@ -60,7 +61,7 @@ async def create_page():
     if not browser:
         return None
     context = await browser.new_context(
-        viewport={"width": 1920, "height": 1080},
+        viewport={"width": 1280, "height": 720},
         user_agent=(
             "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
             "(KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"
@@ -303,7 +304,14 @@ async def extract_page_content(page, description: str = "") -> dict:
 
     Returns a dict with title, url, visible text elements, and metadata.
     """
-    title = await page.title()
+    # Guard against crashed pages
+    if page.is_closed():
+        raise Exception("Page is closed — browser tab crashed")
+
+    try:
+        title = await page.title()
+    except Exception:
+        title = "Unknown"
     url = page.url
 
     # Extract visible text grouped by semantic tag

@@ -109,7 +109,7 @@ export default function RunViewer() {
 
   const isLive = run?.status === 'running' || run?.status === 'pending';
 
-  // Live browser feed via WebSocket — connect when run is live
+  // Live browser feed — try WebSocket first, fall back to SSE screenshots
   useEffect(() => {
     if (!isLive || !id) {
       if (wsRef.current) {
@@ -125,9 +125,18 @@ export default function RunViewer() {
     ws.binaryType = 'arraybuffer';
     wsRef.current = ws;
 
-    ws.onopen = () => setBrowserConnected(true);
+    let connected = false;
+    const fallbackTimer = setTimeout(() => {
+      // If WebSocket hasn't connected in 4s, close it — SSE screenshots will be used
+      if (!connected && wsRef.current) {
+        wsRef.current.close();
+        wsRef.current = null;
+      }
+    }, 4000);
+
+    ws.onopen = () => { connected = true; clearTimeout(fallbackTimer); setBrowserConnected(true); };
     ws.onclose = () => setBrowserConnected(false);
-    ws.onerror = () => setBrowserConnected(false);
+    ws.onerror = () => { setBrowserConnected(false); clearTimeout(fallbackTimer); };
 
     ws.onmessage = (evt) => {
       if (evt.data instanceof ArrayBuffer) {
@@ -140,6 +149,7 @@ export default function RunViewer() {
     };
 
     return () => {
+      clearTimeout(fallbackTimer);
       ws.close();
       wsRef.current = null;
       setBrowserConnected(false);
@@ -179,6 +189,10 @@ export default function RunViewer() {
             screenshot_b64: event.screenshot_b64 ?? null,
           },
         }));
+        // If WebSocket isn't connected, use SSE screenshots for the live browser panel
+        if (event.screenshot_b64 && !wsRef.current?.OPEN) {
+          setBrowserSrc(`data:image/jpeg;base64,${event.screenshot_b64}`);
+        }
         addLog('success', `Step ${event.step_number || '?'} completed successfully`);
       } else if (event.type === 'step_failed' && event.step_id) {
         setLiveSteps((prev) => ({
@@ -484,7 +498,7 @@ export default function RunViewer() {
               )}
             </div>
             <span className="text-xs text-gray-400">
-              {browserConnected ? '~3 fps stream' : isLive ? 'Connecting...' : 'Stream ended'}
+              {browserConnected ? '~3 fps stream' : isLive ? (browserSrc ? 'Step screenshots' : 'Connecting...') : 'Stream ended'}
             </span>
           </div>
           <div className="bg-black flex items-center justify-center" style={{ minHeight: '360px' }}>

@@ -523,6 +523,19 @@ class ExecutorService:
                         continue
 
                     try:
+                        # Recover from page crash — create a new page if needed
+                        if page and page.is_closed():
+                            logger.warning(f"Page crashed before step {step.step_number}, recovering...")
+                            try:
+                                from app.services.browser_service import create_page
+                                page = await create_page()
+                                if page:
+                                    self._run_pages[run_id] = page
+                                    logger.info("Browser page recovered after crash")
+                            except Exception as re_err:
+                                logger.warning(f"Page recovery failed: {re_err}")
+                                page = None
+
                         await self._execute_step(step, db, run_id, page)
 
                         # Check if this step was a conditional that evaluated to false
