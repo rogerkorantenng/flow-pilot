@@ -114,11 +114,10 @@ async def chat(req: ChatRequest, user_id: str = Depends(get_user_id), db: AsyncS
     try:
         from app.services.nova_service import NovaService
         nova = NovaService()
-        if not nova._is_throttled():
-            prompt = f"{system_context}\n\nUser: {req.message}"
-            raw = await asyncio.to_thread(nova._invoke_text, prompt, CHAT_SYSTEM, 512)
-            reply = raw.strip()
-            ai_generated = True
+        prompt = f"{system_context}\n\nUser: {req.message}"
+        raw = await asyncio.to_thread(nova.invoke_text_with_retry, prompt, CHAT_SYSTEM, 512)
+        reply = raw.strip()
+        ai_generated = True
     except Exception as e:
         logger.warning(f"Nova chat failed: {e}")
 

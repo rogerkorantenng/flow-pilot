@@ -225,7 +225,7 @@ async def generate_insights(
     try:
         from app.services.nova_service import NovaService
         nova = NovaService()
-        if not nova._is_throttled() and results:
+        if results:
             # Prepare context for AI
             data_summary = json.dumps(results[:10], default=str)[:3000]
             prompt = f"""Analyze this workflow execution data and provide 2-3 actionable business insights:
@@ -235,7 +235,7 @@ async def generate_insights(
 Return a brief 2-3 sentence executive summary highlighting key findings, trends, and recommendations."""
 
             raw = await asyncio.to_thread(
-                nova._invoke_text, prompt,
+                nova.invoke_text_with_retry, prompt,
                 "You are a business analyst AI. Provide concise, actionable insights from workflow data.",
                 512,
             )

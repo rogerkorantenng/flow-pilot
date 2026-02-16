@@ -211,8 +211,7 @@ async def run_summary(run_id: str, user_id: str = Depends(get_user_id), db: Asyn
     try:
         from app.services.nova_service import NovaService
         nova = NovaService()
-        if not nova._is_throttled():
-            prompt = f"""Summarize this workflow run in 2-3 concise sentences for a business user.
+        prompt = f"""Summarize this workflow run in 2-3 concise sentences for a business user.
 
 Workflow: {workflow_name}
 Status: {run.status}
@@ -224,7 +223,7 @@ Step details:
 Write a natural, insightful summary focusing on key findings and results. Be specific with numbers and data points."""
 
             raw = await asyncio.to_thread(
-                nova._invoke_text, prompt,
+                nova.invoke_text_with_retry, prompt,
                 "You are a concise business analyst. Summarize workflow results clearly.", 256
             )
             return {"summary": raw.strip(), "ai_generated": True}
@@ -265,8 +264,7 @@ async def ai_fix_step(run_id: str, step_id: str, req: AIFixRequest):
     try:
         from app.services.nova_service import NovaService
         nova = NovaService()
-        if not nova._is_throttled():
-            prompt = f"""A browser automation step failed. Analyze the error and suggest a fix.
+        prompt = f"""A browser automation step failed. Analyze the error and suggest a fix.
 
 Step: {req.step_action} - {req.step_description or 'N/A'}
 Target: {req.step_target or 'N/A'}
@@ -280,7 +278,7 @@ Provide:
 Be concise and practical."""
 
             raw = await asyncio.to_thread(
-                nova._invoke_text, prompt,
+                nova.invoke_text_with_retry, prompt,
                 "You are a browser automation debugging expert. Be concise and actionable.", 256
             )
             return {"suggestion": raw.strip(), "ai_generated": True}

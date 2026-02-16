@@ -814,7 +814,7 @@ class ExecutorService:
 
             # If Nova AI is available, let it structure the extracted content
             nova = _get_nova()
-            if nova and not nova._is_throttled():
+            if nova:
                 try:
                     structured = await self._nova_extract_from_content(
                         nova, raw_content, step.description, step.target,
@@ -868,7 +868,7 @@ class ExecutorService:
 
             # Try Nova AI for intelligent evaluation
             nova = _get_nova()
-            if nova and not nova._is_throttled():
+            if nova:
                 try:
                     return await self._nova_conditional(nova, condition, prev_data)
                 except Exception:
@@ -913,7 +913,7 @@ Target: {target}
 
 Extract the requested data from the page content above. Return ONLY valid JSON."""
 
-        raw = await asyncio.to_thread(nova._invoke_text, prompt, EXTRACT_SYSTEM, 2048)
+        raw = await asyncio.to_thread(nova.invoke_text_with_retry, prompt, EXTRACT_SYSTEM, 2048)
         text = raw.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -931,7 +931,7 @@ Previous step result data:
 
 Evaluate this condition based on the data. Return JSON with "evaluated_to" (boolean) and "reason" (string)."""
 
-        raw = await asyncio.to_thread(nova._invoke_text, prompt, CONDITIONAL_SYSTEM, 256)
+        raw = await asyncio.to_thread(nova.invoke_text_with_retry, prompt, CONDITIONAL_SYSTEM, 256)
         text = raw.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -1002,7 +1002,7 @@ Target: {step.target}
 Generate realistic, detailed structured JSON data that would be extracted from this page.
 Return ONLY valid JSON."""
 
-            raw = await asyncio.to_thread(nova._invoke_text, prompt, EXTRACT_SYSTEM, 2048)
+            raw = await asyncio.to_thread(nova.invoke_text_with_retry, prompt, EXTRACT_SYSTEM, 2048)
             text = raw.strip()
             if text.startswith("```"):
                 text = text.split("\n", 1)[1] if "\n" in text else text[3:]
@@ -1129,7 +1129,7 @@ Error: {error_msg}
 Return JSON: {{"fixed_target": "...", "fixed_value": "...", "explanation": "..."}}"""
 
             raw = await asyncio.to_thread(
-                nova._invoke_text, prompt,
+                nova.invoke_text_with_retry, prompt,
                 "You are a browser automation debugging expert. Return ONLY valid JSON.", 512,
             )
             text = raw.strip()

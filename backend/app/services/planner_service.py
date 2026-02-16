@@ -178,10 +178,10 @@ class PlannerService:
 
     async def plan(self, description: str) -> list[dict]:
         nova = self._get_nova()
-        if nova and not nova._is_throttled():
+        if nova:
             try:
                 prompt = f"Decompose this workflow into browser automation steps:\n\n{description}\n\nReturn ONLY the JSON array, no other text."
-                raw = await asyncio.to_thread(nova._invoke_text, prompt, PLANNER_SYSTEM)
+                raw = await asyncio.to_thread(nova.invoke_text_with_retry, prompt, PLANNER_SYSTEM)
                 text = raw.strip()
                 if text.startswith("```"):
                     text = text.split("\n", 1)[1] if "\n" in text else text[3:]

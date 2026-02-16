@@ -314,8 +314,6 @@ async def _ai_find_element(page, target_description: str, *, action: str = ""):
     try:
         from app.services.nova_service import NovaService, ThrottledError
         nova = NovaService()
-        if nova._is_throttled():
-            return None
     except Exception:
         return None
 
@@ -366,7 +364,7 @@ Return ONLY valid JSON, nothing else."""
         system = "You are a browser automation expert. Given a screenshot and element list, identify the correct interactive element. Return ONLY valid JSON."
 
         import asyncio as _aio
-        raw = await _aio.to_thread(nova._invoke_image, prompt, screenshot_b64, system, 256)
+        raw = await _aio.to_thread(nova.invoke_image_with_retry, prompt, screenshot_b64, system, 256)
         text = raw.strip()
         if text.startswith("```"):
             text = text.split("\n", 1)[1] if "\n" in text else text[3:]
